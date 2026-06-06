@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Add a YouTube video to Bella Player's videos.json.
+
+Usage:
+  scripts/add-video "https://www.youtube.com/watch?v=VIDEO_ID"
+  scripts/add-video "search terms from screenshot"
+  scripts/add-video --push "search terms"
+
+Requires yt-dlp on PATH.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+URL_ID_RE = re.compile(
+    r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|shorts/))([A-Za-z0-9_-]{11})"
+)
+
+
+def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, check=check, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def extract_id(input_text: str) -> str | None:
+    stripped = input_text.strip()
+    if YOUTUBE_ID_RE.match(stripped):
+        return stripped
+    match = URL_ID_RE.search(stripped)
+    if match:
+        return match.group(1)
+    return None
+
+
+def resolve_video(input_text: str) -> tuple[str, str, str]:
+    video_id = extract_id(input_text)
+    target = f"https://www.youtube.com/watch?v={video_id}" if video_id else f"ytsearch1:{input_text}"
+    proc = run([
+        "yt-dlp",
+        "--skip-download",
+        "--print",
+        "%(id)s\t%(title)s\t%(uploader)s",
+        target,
+    ])
+    line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    parts = line.split("\t")
+    if len(parts) < 2 or not YOUTUBE_ID_RE.match(parts[0]):
+        raise SystemExit(f"Could not resolve YouTube video from: {input_text!r}\n{proc.stderr}")
+    return parts[0], parts[1], parts[2] if len(parts) > 2 else ""
+
+
+def commit_subject(title: str) -> str:
+    clean = re.sub(r"[^\w\s-]", "", title, flags=re.UNICODE).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    if len(clean) > 48:
+        clean = clean[:48].rstrip()
+    return f"feat: add {clean} video" if clean else "feat: add video"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Add a YouTube video to Bella Player.")
+    parser.add_argument("video", help="YouTube URL, 11-character ID, or search query")
+    parser.add_argument("--json", dest="json_path", default="videos.json", help="Path to videos.json")
+    parser.add_argument("--commit", action="store_true", help="Commit the videos.json change")
+    parser.add_argument("--push", action="store_true", help="Commit and push to origin HEAD")
+    args = parser.parse_args()
+
+    repo = Path(__file__).resolve().parents[1]
+    videos_path = (repo / args.json_path).resolve()
+    video_id, title, uploader = resolve_video(args.video)
+
+    videos = json.loads(videos_path.read_text(encoding="utf-8"))
+    if any(item.get("id") == video_id for item in videos):
+        print(f"Already present: {video_id} — {title}")
+        return 0
+
+    videos.append({"id": video_id, "title": title})
+    videos_path.write_text(json.dumps(videos, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json.loads(videos_path.read_text(encoding="utf-8"))
+
+    print(f"Added: {video_id} — {title}" + (f" ({uploader})" if uploader else ""))
+
+    if args.push:
+        args.commit = True
+    if args.commit:
+        run(["git", "add", str(videos_path.relative_to(repo))])
+        run(["git", "commit", "-m", commit_subject(title)])
+        if args.push:
+            run(["git", "push", "origin", "HEAD"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
