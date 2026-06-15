@@ -94,6 +94,41 @@
       border: 0;
     }
 
+    .end-screen {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 22px;
+      text-align: center;
+      color: white;
+      background: linear-gradient(135deg, rgba(59, 23, 48, 0.96), rgba(255, 127, 188, 0.84));
+    }
+
+    .end-screen.visible {
+      display: grid;
+    }
+
+    .end-screen strong {
+      display: block;
+      margin-bottom: 14px;
+      font-size: clamp(1.15rem, 3vw, 1.8rem);
+      line-height: 1.2;
+    }
+
+    .replay-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 17px;
+      color: var(--text);
+      background: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+    }
+
     .video-meta {
       padding: 16px 18px 18px;
     }
@@ -251,6 +286,12 @@
           allowfullscreen
           referrerpolicy="strict-origin-when-cross-origin">
         </iframe>
+        <div class="end-screen" id="end-screen" aria-live="polite" aria-hidden="true">
+          <div>
+            <strong id="end-title">Videoen er slut</strong>
+            <button class="replay-button" id="replay-button" type="button">Afspil igen</button>
+          </div>
+        </div>
       </div>
       <div class="video-meta">
         <h2 id="current-title">Vælg en video</h2>
@@ -277,6 +318,16 @@
     const helpEl = document.getElementById("current-help");
     const counterEl = document.getElementById("counter");
     const playlistCountEl = document.getElementById("playlist-count");
+    const endScreenEl = document.getElementById("end-screen");
+    const endTitleEl = document.getElementById("end-title");
+    const replayButtonEl = document.getElementById("replay-button");
+    let currentVideo = null;
+    let currentButton = null;
+
+    function youTubeOrigin() {
+      if (location.origin && location.origin !== "null") return { origin: location.origin };
+      return {};
+    }
 
     function extractVideoId(value) {
       if (!value) return "";
@@ -299,9 +350,28 @@
       const params = new URLSearchParams({
         rel: "0",
         modestbranding: "1",
-        playsinline: "1"
+        playsinline: "1",
+        enablejsapi: "1",
+        ...youTubeOrigin()
       });
       return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+    }
+
+    function hideEndScreen() {
+      endScreenEl.classList.remove("visible");
+      endScreenEl.setAttribute("aria-hidden", "true");
+    }
+
+    function showEndScreen() {
+      if (!currentVideo) return;
+      endTitleEl.textContent = `${currentVideo.title} er slut`;
+      endScreenEl.classList.add("visible");
+      endScreenEl.setAttribute("aria-hidden", "false");
+
+      // YouTube cannot fully disable the end-card/recommendation UI for embeds.
+      // Blank the iframe as soon as playback ends, so Bella Player shows our own
+      // neutral end screen instead of YouTube's related-video grid.
+      playerEl.src = "about:blank";
     }
 
     function normalizeVideos(rawVideos) {
@@ -319,6 +389,9 @@
     }
 
     function selectVideo(video, button) {
+      currentVideo = video;
+      currentButton = button;
+      hideEndScreen();
       playerEl.src = embedUrl(video.id);
       titleEl.textContent = video.title;
       helpEl.textContent = video.note || "Afspilles sikkert fra den valgte liste.";
@@ -326,6 +399,26 @@
       document.querySelectorAll(".video-button.active").forEach((el) => el.classList.remove("active"));
       if (button) button.classList.add("active");
     }
+
+    function setupYouTubeEndDetection() {
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(script);
+
+      window.onYouTubeIframeAPIReady = () => {
+        new YT.Player("player", {
+          events: {
+            onStateChange(event) {
+              if (event.data === YT.PlayerState.ENDED) showEndScreen();
+            }
+          }
+        });
+      };
+    }
+
+    replayButtonEl.addEventListener("click", () => {
+      if (currentVideo) selectVideo(currentVideo, currentButton);
+    });
 
     function renderVideos(videos) {
       if (!videos.length) {
@@ -384,6 +477,7 @@
       }
     }
 
+    setupYouTubeEndDetection();
     loadVideos();
   </script>
 </body>
